@@ -3,7 +3,7 @@
 <head>
 　<meta charset="UTF-8">
 　<meta name="viewport" content="width=device-width, initial-scale=1.0">
-　<title>ブラウザ録画＆静止画キャプチャ</title>
+　<title>ブラウザ録画＆静止画キャプチャ（MP4対応）</title>
 　<style>
 　　body {
 　　　font-family: sans-serif;
@@ -21,10 +21,15 @@
 　　　margin: 5px;
 　　　border: solid 1px #ddd;
 　　}
+　　#message {
+　　　margin-top: 10px;
+　　　font-weight: bold;
+　　　color: red;
+　　}
 　</style>
 </head>
 <body>
-　<h1>ブラウザ録画＆静止画キャプチャ</h1>
+　<h1>ブラウザ録画＆静止画キャプチャ（MP4対応）</h1>
 　<video id="video" width="705" height="397" autoplay playsinline></video>
 　<br>
 　<button id="startRecord">録画開始</button>
@@ -32,14 +37,30 @@
 　<button id="capture25">25枚キャプチャ</button>
 　<button id="capture1_5">1.5秒キャプチャ</button>
 　<button id="clearImages">画像クリア</button>
-　
+　<div id="message"></div>
 　<div id="images"></div>
 　
+　<!-- ffmpeg.wasmの読み込み -->
+　<script src="https://unpkg.com/@ffmpeg/ffmpeg@0.11.6/dist/ffmpeg.min.js"></script>
 　<script>
+　　const { createFFmpeg, fetchFile } = FFmpeg;
+　　const ffmpeg = createFFmpeg({ log: true });
+　　let ffmpegLoaded = false;
+　　
 　　let mediaRecorder;
 　　let recordedChunks = [];
 　　let stream;
-
+　　
+　　// ffmpegの初回読み込み
+　　async function loadFFmpeg() {
+　　　if (!ffmpegLoaded) {
+　　　　document.getElementById('message').innerText = "FFmpeg読み込み中...";
+　　　　await ffmpeg.load();
+　　　　ffmpegLoaded = true;
+　　　　document.getElementById('message').innerText = "";
+　　　}
+　　}
+　　
 　　// 画面録画開始
 　　async function startRecording() {
 　　　try {
@@ -51,7 +72,7 @@
 　　　　alert("画面共有が許可されていません：" + err);
 　　　　return;
 　　　}
-
+　　
 　　　document.getElementById("video").srcObject = stream;
 　　　recordedChunks = [];
 　　　try {
@@ -60,33 +81,42 @@
 　　　　alert("MediaRecorderがサポートされていません：" + e);
 　　　　return;
 　　　}
-
+　　
 　　　mediaRecorder.ondataavailable = event => {
 　　　　if (event.data && event.data.size > 0) {
 　　　　　　recordedChunks.push(event.data);
 　　　　}
 　　　};
-
-　　　mediaRecorder.onstop = () => {
-　　　　const blob = new Blob(recordedChunks, { type: "video/webm" });
-　　　　const url = URL.createObjectURL(blob);
+　　
+　　　mediaRecorder.onstop = async () => {
+　　　　document.getElementById('message').innerText = "録画停止。MP4変換中...";
+　　　　const webmBlob = new Blob(recordedChunks, { type: "video/webm" });
+　　　　
+　　　　// ffmpeg読み込み＆MP4変換
+　　　　await loadFFmpeg();
+　　　　ffmpeg.FS('writeFile', 'input.webm', await fetchFile(webmBlob));
+　　　　await ffmpeg.run('-i', 'input.webm', '-c:v', 'libx264', '-preset', 'fast', '-crf', '23', '-c:a', 'aac', '-b:a', '128k', 'output.mp4');
+　　　　const data = ffmpeg.FS('readFile', 'output.mp4');
+　　　　const mp4Blob = new Blob([data.buffer], { type: 'video/mp4' });
+　　　　const url = URL.createObjectURL(mp4Blob);
 　　　　const a = document.createElement("a");
 　　　　a.href = url;
-　　　　a.download = "recording.webm";
+　　　　a.download = "recording.mp4";
 　　　　a.style.display = "none";
 　　　　document.body.appendChild(a);
 　　　　a.click();
 　　　　setTimeout(() => {
 　　　　　　document.body.removeChild(a);
 　　　　　　URL.revokeObjectURL(url);
+　　　　　　document.getElementById('message').innerText = "変換完了";
 　　　　}, 100);
 　　　};
-
+　　
 　　　mediaRecorder.start();
 　　　document.getElementById("startRecord").disabled = true;
 　　　document.getElementById("stopRecord").disabled = false;
 　　}
-
+　　
 　　// 録画停止
 　　function stopRecording() {
 　　　if (mediaRecorder && mediaRecorder.state !== "inactive") {
@@ -98,8 +128,8 @@
 　　　document.getElementById("startRecord").disabled = false;
 　　　document.getElementById("stopRecord").disabled = true;
 　　}
-
-　　// 静止画をキャプチャ
+　　
+　　// 静止画キャプチャ
 　　function captureImage() {
 　　　const video = document.getElementById("video");
 　　　if (!video || !video.srcObject) {
@@ -115,7 +145,7 @@
 　　　img.src = canvas.toDataURL("image/png");
 　　　document.getElementById("images").appendChild(img);
 　　}
-
+　　
 　　// 25枚、1秒間隔でキャプチャ
 　　async function capture25Images() {
 　　　for (let i = 0; i < 25; i++) {
@@ -123,7 +153,7 @@
 　　　　await new Promise(res => setTimeout(res, 1000));
 　　　}
 　　}
-
+　　
 　　// 1.5秒間隔で25枚キャプチャ
 　　function captureImagesEvery1_5Sec() {
 　　　let count = 0;
@@ -136,17 +166,17 @@
 　　　　count++;
 　　　}, 1500);
 　　}
-
+　　
 　　// 画像クリア
 　　function clearImages() {
 　　　document.getElementById("images").innerHTML = "";
 　　}
-
+　　
 　　document.getElementById("startRecord").addEventListener("click", startRecording);
 　　document.getElementById("stopRecord").addEventListener("click", stopRecording);
 　　document.getElementById("capture25").addEventListener("click", capture25Images);
 　　document.getElementById("capture1_5").addEventListener("click", captureImagesEvery1_5Sec);
 　　document.getElementById("clearImages").addEventListener("click", clearImages);
-　　</script>
+　</script>
 </body>
 </html>
