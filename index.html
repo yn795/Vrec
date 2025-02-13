@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+　<meta charset="UTF-8">
+　<meta name="viewport" content="width=device-width, initial-scale=1.0">
+　<title>ブラウザ録画＆静止画キャプチャ</title>
+　<style>
+　　body {
+　　　font-family: sans-serif;
+　　　padding: 20px;
+　　}
+　　#video {
+　　　border: solid 1px #ccc;
+　　　background: #000;
+　　}
+　　button {
+　　　margin: 5px;
+　　　padding: 10px;
+　　}
+　　#images img {
+　　　margin: 5px;
+　　　border: solid 1px #ddd;
+　　}
+　</style>
+</head>
+<body>
+　<h1>ブラウザ録画＆静止画キャプチャ</h1>
+　<video id="video" width="705" height="397" autoplay playsinline></video>
+　<br>
+　<button id="startRecord">録画開始</button>
+　<button id="stopRecord" disabled>録画停止</button>
+　<button id="capture25">25枚キャプチャ</button>
+　<button id="capture1_5">1.5秒キャプチャ</button>
+　<button id="clearImages">画像クリア</button>
+　
+　<div id="images"></div>
+　
+　<script>
+　　let mediaRecorder;
+　　let recordedChunks = [];
+　　let stream;
+
+　　// 画面録画開始
+　　async function startRecording() {
+　　　try {
+　　　　stream = await navigator.mediaDevices.getDisplayMedia({
+　　　　　　video: { width: 705, height: 397 },
+　　　　　　audio: false
+　　　　});
+　　　} catch (err) {
+　　　　alert("画面共有が許可されていません：" + err);
+　　　　return;
+　　　}
+
+　　　document.getElementById("video").srcObject = stream;
+　　　recordedChunks = [];
+　　　try {
+　　　　mediaRecorder = new MediaRecorder(stream, { mimeType: "video/webm" });
+　　　} catch (e) {
+　　　　alert("MediaRecorderがサポートされていません：" + e);
+　　　　return;
+　　　}
+
+　　　mediaRecorder.ondataavailable = event => {
+　　　　if (event.data && event.data.size > 0) {
+　　　　　　recordedChunks.push(event.data);
+　　　　}
+　　　};
+
+　　　mediaRecorder.onstop = () => {
+　　　　const blob = new Blob(recordedChunks, { type: "video/webm" });
+　　　　const url = URL.createObjectURL(blob);
+　　　　const a = document.createElement("a");
+　　　　a.href = url;
+　　　　a.download = "recording.webm";
+　　　　a.style.display = "none";
+　　　　document.body.appendChild(a);
+　　　　a.click();
+　　　　setTimeout(() => {
+　　　　　　document.body.removeChild(a);
+　　　　　　URL.revokeObjectURL(url);
+　　　　}, 100);
+　　　};
+
+　　　mediaRecorder.start();
+　　　document.getElementById("startRecord").disabled = true;
+　　　document.getElementById("stopRecord").disabled = false;
+　　}
+
+　　// 録画停止
+　　function stopRecording() {
+　　　if (mediaRecorder && mediaRecorder.state !== "inactive") {
+　　　　mediaRecorder.stop();
+　　　}
+　　　if (stream) {
+　　　　stream.getTracks().forEach(track => track.stop());
+　　　}
+　　　document.getElementById("startRecord").disabled = false;
+　　　document.getElementById("stopRecord").disabled = true;
+　　}
+
+　　// 静止画をキャプチャ
+　　function captureImage() {
+　　　const video = document.getElementById("video");
+　　　if (!video || !video.srcObject) {
+　　　　alert("画面共有を開始してください");
+　　　　return;
+　　　}
+　　　const canvas = document.createElement("canvas");
+　　　canvas.width = 705;
+　　　canvas.height = 397;
+　　　const ctx = canvas.getContext("2d");
+　　　ctx.drawImage(video, 0, 0, 705, 397);
+　　　const img = document.createElement("img");
+　　　img.src = canvas.toDataURL("image/png");
+　　　document.getElementById("images").appendChild(img);
+　　}
+
+　　// 25枚、1秒間隔でキャプチャ
+　　async function capture25Images() {
+　　　for (let i = 0; i < 25; i++) {
+　　　　captureImage();
+　　　　await new Promise(res => setTimeout(res, 1000));
+　　　}
+　　}
+
+　　// 1.5秒間隔で25枚キャプチャ
+　　function captureImagesEvery1_5Sec() {
+　　　let count = 0;
+　　　const interval = setInterval(() => {
+　　　　if (count >= 25) {
+　　　　　　clearInterval(interval);
+　　　　　　return;
+　　　　}
+　　　　captureImage();
+　　　　count++;
+　　　}, 1500);
+　　}
+
+　　// 画像クリア
+　　function clearImages() {
+　　　document.getElementById("images").innerHTML = "";
+　　}
+
+　　document.getElementById("startRecord").addEventListener("click", startRecording);
+　　document.getElementById("stopRecord").addEventListener("click", stopRecording);
+　　document.getElementById("capture25").addEventListener("click", capture25Images);
+　　document.getElementById("capture1_5").addEventListener("click", captureImagesEvery1_5Sec);
+　　document.getElementById("clearImages").addEventListener("click", clearImages);
+　　</script>
+</body>
+</html>
