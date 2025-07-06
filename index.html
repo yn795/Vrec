@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>自動 MP4 / MP3 変換レコーダー</title>
+  <title>自動 MP4 / MP3 変換レコーダー（デバッグ付き）</title>
   <style>
     body { font-family: sans-serif; padding: 20px; }
     #video { border: 1px solid #ccc; background:#000; }
@@ -12,10 +12,10 @@
   </style>
 </head>
 <body>
-  <h1>自動 MP4 / MP3 変換レコーダー</h1>
+  <h1>デバッグ付き 自動 MP4 / MP3 変換レコーダー</h1>
   <video id="video" width="705" height="397" autoplay playsinline></video><br>
   <button id="startRecord">録画開始</button>
-  <button id="stopRecord"  disabled>録画停止</button>
+  <button id="stopRecord" disabled>録画停止</button>
   <button id="capture25">25枚キャプチャ</button>
   <button id="capture1_5">1.5秒キャプチャ</button>
   <button id="clearImages">画像クリア</button>
@@ -25,103 +25,130 @@
   <!-- ffmpeg.wasm -->
   <script src="https://unpkg.com/@ffmpeg/ffmpeg@0.11.8/dist/ffmpeg.min.js"></script>
   <script>
-    // ---- 任意設定ここだけ ----
-    const NEED_MP4 = true;   // ≫ 映像付き MP4 も欲しい場合 true（音声 MP3 だけなら false）
-    // -------------------------
+    document.addEventListener('DOMContentLoaded', () => {
+      const startBtn   = document.getElementById('startRecord');
+      const stopBtn    = document.getElementById('stopRecord');
+      const cap25Btn   = document.getElementById('capture25');
+      const cap1_5Btn  = document.getElementById('capture1_5');
+      const clearBtn   = document.getElementById('clearImages');
+      const videoElem  = document.getElementById('video');
+      const imagesDiv  = document.getElementById('images');
 
-    let stream, recorder, chunks = [];
+      let stream, recorder, chunks = [];
 
-    async function startRecording() {
-      try {
-        stream = await navigator.mediaDevices.getDisplayMedia({
-          video: { width: 705, height: 397 },
-          audio: true
+      // 録画開始
+      startBtn.addEventListener('click', async () => {
+        try {
+          stream = await navigator.mediaDevices.getDisplayMedia({
+            video: { width: 705, height: 397 },
+            audio: true
+          });
+        } catch (e) {
+          console.error('getDisplayMedia error:', e);
+          alert('画面共有が許可されませんでした：' + e);
+          return;
+        }
+        videoElem.srcObject = stream;
+        chunks = [];
+
+        try {
+          recorder = new MediaRecorder(stream, { mimeType: 'video/webm;codecs=vp8,opus' });
+        } catch (e) {
+          console.error('MediaRecorder error:', e);
+          alert('MediaRecorder 非対応：' + e);
+          return;
+        }
+
+        recorder.addEventListener('dataavailable', e => {
+          if (e.data.size) chunks.push(e.data);
         });
-      } catch (e) {
-        alert('画面共有が許可されませんでした：' + e);
-        return;
+
+        recorder.addEventListener('stop', async () => {
+          console.log('⏹ recorder stop event fired');
+          const blob = new Blob(chunks, { type: 'video/webm' });
+          await convertWithFFmpeg(blob);
+        });
+
+        recorder.start();
+        startBtn.disabled = true;
+        stopBtn.disabled  = false;
+      });
+
+      // 録画停止
+      stopBtn.addEventListener('click', () => {
+        console.log('⏸ stopRecording called');
+        if (recorder && recorder.state !== 'inactive') {
+          recorder.stop();
+        }
+        if (stream) {
+          stream.getTracks().forEach(t => t.stop());
+        }
+        startBtn.disabled = false;
+        stopBtn.disabled  = true;
+      });
+
+      // --- 画像キャプチャ機能（省略） ---
+      function capture() {
+        if (!videoElem.srcObject) return alert('先に録画を開始してください');
+        const c = document.createElement('canvas');
+        c.width = 705; c.height = 397;
+        c.getContext('2d').drawImage(videoElem, 0, 0);
+        const img = document.createElement('img');
+        img.src = c.toDataURL('image/png');
+        imagesDiv.appendChild(img);
+      }
+      cap25Btn.addEventListener('click', async () => {
+        for (let i=0; i<25; i++){ capture(); await new Promise(r=>setTimeout(r,1000)); }
+      });
+      cap1_5Btn.addEventListener('click', () => {
+        let n=0,iv=setInterval(()=>{
+          if (n++>=25) return clearInterval(iv);
+          capture();
+        },1500);
+      });
+      clearBtn.addEventListener('click', () => imagesDiv.innerHTML='');
+
+      // --- ffmpeg.wasm で MP4/MP3 生成＆ダウンロード ---
+      async function convertWithFFmpeg(webmBlob){
+        console.log('🔄 convertWithFFmpeg start');
+        const { createFFmpeg, fetchFile } = FFmpeg;
+        const ffmpeg = createFFmpeg({ log:true });
+        await ffmpeg.load();
+        ffmpeg.FS('writeFile','in.webm', await fetchFile(webmBlob));
+
+        // MP4
+        await ffmpeg.run(
+          '-i','in.webm',
+          '-c:v','libx264','-preset','fast','-crf','23',
+          '-c:a','aac','-b:a','128k',
+          'out.mp4'
+        );
+        download('out.mp4','recording.mp4','video/mp4');
+
+        // MP3
+        await ffmpeg.run(
+          '-i','in.webm','-vn',
+          '-c:a','libmp3lame','-b:a','128k',
+          'out.mp3'
+        );
+        download('out.mp3','recording.mp3','audio/mp3');
+
+        console.log('✅ convertWithFFmpeg done');
       }
 
-      document.getElementById('video').srcObject = stream;
-      chunks = [];
-
-      try {
-        recorder = new MediaRecorder(stream, { mimeType: 'video/webm;codecs=vp8,opus' });
-      } catch (e) {
-        alert('MediaRecorder 非対応：' + e);
-        return;
+      function download(nameInFS, fileName, mime){
+        const data = ffmpeg.FS('readFile', nameInFS);
+        const url  = URL.createObjectURL(new Blob([data.buffer],{type:mime}));
+        const a    = document.createElement('a');
+        a.href     = url;
+        a.download = fileName;
+        a.style.display = 'none';
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
       }
-
-      recorder.ondataavailable = e => { if (e.data.size) chunks.push(e.data); };
-      recorder.onstop = async () => {
-        const blob = new Blob(chunks, { type: 'video/webm' });
-        await convertWithFFmpeg(blob);
-      };
-
-      recorder.start();
-      toggleButtons(true);
-    }
-
-    function stopRecording() {
-      recorder?.stop();
-      stream?.getTracks().forEach(t => t.stop());
-      toggleButtons(false);
-    }
-
-    function toggleButtons(recording) {
-      document.getElementById('startRecord').disabled = recording;
-      document.getElementById('stopRecord').disabled  = !recording;
-    }
-
-    // ----- 画像キャプチャ（おまけ機能）は前のまま -----
-    function capture() {
-      const v = document.getElementById('video');
-      if (!v.srcObject) return alert('先に録画を開始してください');
-      const c = Object.assign(document.createElement('canvas'), { width:705, height:397 });
-      c.getContext('2d').drawImage(v,0,0,705,397);
-      const img = document.createElement('img');
-      img.src = c.toDataURL('image/png');
-      document.getElementById('images').appendChild(img);
-    }
-    async function capture25(){ for(let i=0;i<25;i++){capture();await new Promise(r=>setTimeout(r,1000));}}
-    function capture1_5(){ let n=0,iv=setInterval(()=>{ if(n++>=25) return clearInterval(iv); capture(); },1500);}
-    function clearImages(){ document.getElementById('images').innerHTML=''; }
-
-    // ----- ffmpeg.wasm で MP4 / MP3 生成 -----
-    async function convertWithFFmpeg(webmBlob){
-      const { createFFmpeg, fetchFile } = FFmpeg;
-      const ffmpeg = createFFmpeg({ log:false });
-      await ffmpeg.load();
-      ffmpeg.FS('writeFile','in.webm', await fetchFile(webmBlob));
-
-      if (NEED_MP4){
-        await ffmpeg.run('-i','in.webm',
-                         '-c:v','libx264','-preset','fast','-crf','23',
-                         '-c:a','aac','-b:a','128k',
-                         'out.mp4');
-        downloadFile(ffmpeg,'out.mp4','recording.mp4','video/mp4');
-      }
-
-      await ffmpeg.run('-i','in.webm','-vn',
-                       '-c:a','libmp3lame','-b:a','128k',
-                       'out.mp3');
-      downloadFile(ffmpeg,'out.mp3','recording.mp3','audio/mp3');
-    }
-
-    function downloadFile(ffmpeg, nameInFS, fileName, mime){
-      const data = ffmpeg.FS('readFile', nameInFS);
-      const url  = URL.createObjectURL(new Blob([data.buffer],{type:mime}));
-      const a    = Object.assign(document.createElement('a'),{href:url,download:fileName,style:'display:none'});
-      document.body.appendChild(a); a.click(); document.body.removeChild(a);
-      URL.revokeObjectURL(url);
-    }
-
-    // ----- イベント登録 -----
-    document.getElementById('startRecord').addEventListener('click', startRecording);
-    document.getElementById('stopRecord').addEventListener('click',  stopRecording);
-    document.getElementById('capture25').addEventListener('click', capture25);
-    document.getElementById('capture1_5').addEventListener('click', capture1_5);
-    document.getElementById('clearImages').addEventListener('click', clearImages);
+    });
   </script>
 </body>
 </html>
