@@ -3,25 +3,23 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>自動 MP3変換レコーダー</title>
+  <title>自動 MP3 変換レコーダー（マイクキャプチャ）</title>
   <style>
     body { font-family: sans-serif; padding: 20px; }
-    #video { display:none; } /* 映像は隠す */
     button { margin:5px; padding:8px 12px; }
     button:disabled { opacity:0.5; }
     #status { margin-top:10px; color:#555; }
   </style>
 </head>
 <body>
-  <h1>自動 MP3 変換レコーダー</h1>
-  <video id="video" autoplay playsinline muted></video>
+  <h1>マイク音声→MP3 変換レコーダー</h1>
   <div>
-    <button id="start">録画開始</button>
-    <button id="stop" disabled>録画停止</button>
+    <button id="start">録音開始</button>
+    <button id="stop" disabled>録音停止</button>
   </div>
   <div id="status">状態: 初期化中…</div>
 
-  <!-- ffmpeg.wasm ラッパー。crossorigin 属性を必ず付与 -->
+  <!-- ffmpeg.wasm -->
   <script crossorigin src="https://unpkg.com/@ffmpeg/ffmpeg@0.11.8/dist/ffmpeg.min.js"></script>
   <script>
   (()=>{
@@ -30,10 +28,10 @@
     const statusEl = document.getElementById('status');
     const setStatus = t=> statusEl.innerText = '状態: '+t;
 
-    let stream, recorder, chunks = [];
+    let recorder, chunks = [], micStream;
     let ffmpeg, ready = false;
 
-    // —— FFmpeg をバックグラウンドでロード —— 
+    // FFmpeg をバックグラウンドでロード
     (async()=>{
       const { createFFmpeg, fetchFile } = FFmpeg;
       ffmpeg = createFFmpeg({
@@ -44,26 +42,23 @@
       try {
         await ffmpeg.load();
         ready = true;
-        setStatus('準備完了。録画開始できます');
+        setStatus('準備完了。録音開始できます');
       } catch(err) {
         console.error(err);
         setStatus('FFmpegロード失敗: '+err.message);
       }
     })();
 
-    // —— 録画開始 —— 
+    // 録音開始
     btnStart.onclick = async ()=>{
       try {
-        stream = await navigator.mediaDevices.getDisplayMedia({
-          audio: true, video: false
-        });
+        micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
       } catch(err) {
-        return alert('画面共有が許可されていません：'+err.message);
+        return alert('マイクへのアクセスが許可されていません：'+err.message);
       }
       chunks = [];
-      const mime = MediaRecorder.isTypeSupported('audio/webm') ? 'audio/webm' : '';
       try {
-        recorder = new MediaRecorder(stream, { mimeType: mime });
+        recorder = new MediaRecorder(micStream, { mimeType: 'audio/webm' });
       } catch(err) {
         return alert('MediaRecorder 非対応：'+err.message);
       }
@@ -74,30 +69,30 @@
       setStatus('録音中…');
     };
 
-    // —— 録画停止 & MP3 変換 —— 
+    // 録音停止＆MP3変換
     btnStop.onclick = async ()=>{
       btnStop.disabled = true;
       setStatus('録音停止中…');
       recorder.stop();
-      stream.getTracks().forEach(t=>t.stop());
+      micStream.getTracks().forEach(t=>t.stop());
       await new Promise(r=>recorder.onstop = r);
 
-      if(!ready) {
+      if (!ready) {
         return alert('変換エンジン未ロード。少し待ってから再試行してください。');
       }
       setStatus('MP3 に変換中…');
 
-      // Blob → FS に書き込み
-      const blob = new Blob(chunks, { type:'audio/webm' });
-      ffmpeg.FS('writeFile','in.webm', await FFmpeg.fetchFile(blob));
+      // WebM を書き込み
+      const webmBlob = new Blob(chunks, { type:'audio/webm' });
+      ffmpeg.FS('writeFile', 'in.webm', await FFmpeg.fetchFile(webmBlob));
 
       // MP3 出力
       await ffmpeg.run('-i','in.webm','-vn','-q:a','0','out.mp3');
 
       // ダウンロード
-      const data = ffmpeg.FS('readFile','out.mp3');
-      const url  = URL.createObjectURL(new Blob([data.buffer], { type:'audio/mpeg' }));
-      const a    = document.createElement('a');
+      const mp3Data = ffmpeg.FS('readFile','out.mp3');
+      const url = URL.createObjectURL(new Blob([mp3Data.buffer], { type:'audio/mpeg' }));
+      const a = document.createElement('a');
       a.href     = url;
       a.download = 'recording.mp3';
       document.body.appendChild(a);
